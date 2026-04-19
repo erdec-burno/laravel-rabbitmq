@@ -7,6 +7,7 @@ use App\Models\ProcessedOrderMessage;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
+use Ramsey\Uuid\Uuid;
 use Throwable;
 
 class OrderMessageHandler
@@ -17,6 +18,8 @@ class OrderMessageHandler
      * @param array{
      *     id: string,
      *     type: string,
+     *     schema_version?: int,
+     *     producer?: string,
      *     occurred_at: string,
      *     order: array{
      *         order_id: string,
@@ -69,6 +72,8 @@ class OrderMessageHandler
                 Log::info('Processed order message', [
                     'message_id' => $processedMessage->message_id,
                     'event' => $processedMessage->message_type,
+                    'schema_version' => $payload['schema_version'] ?? 1,
+                    'producer' => $payload['producer'] ?? 'gateway-api',
                     'occurred_at' => $processedMessage->occurred_at?->toIso8601String(),
                     'order_id' => $order->external_order_id,
                     'customer_email' => $order->customer_email,
@@ -90,6 +95,8 @@ class OrderMessageHandler
 
             Log::warning('Failed to process order message', [
                 'message_id' => $payload['id'] ?? null,
+                'schema_version' => $payload['schema_version'] ?? null,
+                'producer' => $payload['producer'] ?? null,
                 'order_id' => $order?->external_order_id,
                 'error' => $exception->getMessage(),
             ]);
@@ -111,6 +118,17 @@ class OrderMessageHandler
             throw new InvalidArgumentException('Invalid RabbitMQ payload structure.');
         }
 
+        if (
+            isset($payload['schema_version'])
+            && (! is_int($payload['schema_version']) || $payload['schema_version'] !== 1)
+        ) {
+            throw new InvalidArgumentException('Unsupported RabbitMQ schema version.');
+        }
+
+        if (isset($payload['producer']) && ! is_string($payload['producer'])) {
+            throw new InvalidArgumentException('Invalid RabbitMQ producer.');
+        }
+
         $order = $payload['order'];
 
         if (
@@ -121,6 +139,31 @@ class OrderMessageHandler
             || ! is_string($order['currency'])
         ) {
             throw new InvalidArgumentException('Order payload is missing required fields.');
+        }
+
+        if (
+            ! Uuid::isValid($payload['id'])
+            || ! Uuid::isValid($order['order_id'])
+        ) {
+            throw new InvalidArgumentException('RabbitMQ payload must contain valid UUID values.');
+        }
+
+        if (! filter_var($order['customer_email'], FILTER_VALIDATE_EMAIL)) {
+            throw new InvalidArgumentException('Order payload must contain a valid customer email.');
+        }
+
+        if ((float) $order['amount'] <= 0) {
+            throw new InvalidArgumentException('Order payload amount must be greater than zero.');
+        }
+
+        if (! preg_match('/^[A-Za-z]{3}$/', $order['currency'])) {
+            throw new InvalidArgumentException('Order payload currency must be a 3-letter ISO code.');
+        }
+
+        try {
+            Carbon::parse($payload['occurred_at']);
+        } catch (Throwable $exception) {
+            throw new InvalidArgumentException('Order payload occurred_at must be a valid date.', previous: $exception);
         }
     }
 
@@ -150,7 +193,14 @@ class OrderMessageHandler
             || ! is_string($orderPayload['customer_email'])
             || ! is_numeric($orderPayload['amount'])
             || ! is_string($orderPayload['currency'])
+            || ! Uuid::isValid($orderPayload['order_id'])
         ) {
+            return null;
+        }
+
+        try {
+            $receivedAt = Carbon::parse($occurredAt);
+        } catch (Throwable) {
             return null;
         }
 
@@ -161,7 +211,7 @@ class OrderMessageHandler
                 'amount' => round((float) $orderPayload['amount'], 2),
                 'currency' => strtoupper($orderPayload['currency']),
                 'status' => Order::STATUS_FAILED,
-                'received_at' => Carbon::parse($occurredAt),
+                'received_at' => $receivedAt,
             ],
         );
     }

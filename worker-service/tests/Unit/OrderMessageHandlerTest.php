@@ -9,27 +9,31 @@ it('stores the order and processed message in the database', function () {
     Log::shouldReceive('info')
         ->once()
         ->with('Processed order message', Mockery::subset([
-            'message_id' => 'message-123',
+            'message_id' => '11111111-1111-1111-1111-111111111111',
             'event' => 'orders.created',
-            'order_id' => 'order-123',
+            'schema_version' => 1,
+            'producer' => 'gateway-api',
+            'order_id' => '11111111-1111-1111-1111-111111111123',
             'customer_email' => 'customer@example.com',
             'amount' => 149.99,
             'currency' => 'USD',
         ]));
 
     $processedMessage = app(OrderMessageHandler::class)->handle([
-        'id' => 'message-123',
+        'id' => '11111111-1111-1111-1111-111111111111',
         'type' => 'orders.created',
+        'schema_version' => 1,
+        'producer' => 'gateway-api',
         'occurred_at' => '2026-04-19T18:00:00+00:00',
         'order' => [
-            'order_id' => 'order-123',
+            'order_id' => '11111111-1111-1111-1111-111111111123',
             'customer_email' => 'customer@example.com',
             'amount' => 149.99,
             'currency' => 'USD',
         ],
     ]);
 
-    expect($processedMessage->message_id)->toBe('message-123');
+    expect($processedMessage->message_id)->toBe('11111111-1111-1111-1111-111111111111');
 
     $order = Order::query()->first();
 
@@ -37,7 +41,7 @@ it('stores the order and processed message in the database', function () {
     expect($processedMessage->order_id)->toBe($order->id);
 
     $this->assertDatabaseHas('orders', [
-        'external_order_id' => 'order-123',
+        'external_order_id' => '11111111-1111-1111-1111-111111111123',
         'customer_email' => 'customer@example.com',
         'amount' => 149.99,
         'currency' => 'USD',
@@ -45,7 +49,7 @@ it('stores the order and processed message in the database', function () {
     ]);
 
     $this->assertDatabaseHas('processed_order_messages', [
-        'message_id' => 'message-123',
+        'message_id' => '11111111-1111-1111-1111-111111111111',
         'message_type' => 'orders.created',
         'order_id' => $order->id,
     ]);
@@ -57,16 +61,19 @@ it('does not create a duplicate order or message for the same payload', function
         ->once()
         ->with('Skipped duplicate order message', [
             'message_id' => 'message-123',
-            'order_id' => 'order-123',
+            'message_id' => '11111111-1111-1111-1111-111111111111',
+            'order_id' => '11111111-1111-1111-1111-111111111123',
             'status' => Order::STATUS_PROCESSED,
         ]);
 
     $payload = [
-        'id' => 'message-123',
+        'id' => '11111111-1111-1111-1111-111111111111',
         'type' => 'orders.created',
+        'schema_version' => 1,
+        'producer' => 'gateway-api',
         'occurred_at' => '2026-04-19T18:00:00+00:00',
         'order' => [
-            'order_id' => 'order-123',
+            'order_id' => '11111111-1111-1111-1111-111111111123',
             'customer_email' => 'customer@example.com',
             'amount' => 149.99,
             'currency' => 'USD',
@@ -84,10 +91,13 @@ it('does not create a duplicate order or message for the same payload', function
 it('rejects unsupported message types', function () {
     app(OrderMessageHandler::class)->handle([
         'id' => 'message-123',
+        'id' => '11111111-1111-1111-1111-111111111222',
         'type' => 'orders.cancelled',
+        'schema_version' => 1,
+        'producer' => 'gateway-api',
         'occurred_at' => '2026-04-19T18:00:00+00:00',
         'order' => [
-            'order_id' => 'order-123',
+            'order_id' => '11111111-1111-1111-1111-111111111123',
             'customer_email' => 'customer@example.com',
             'amount' => 149.99,
             'currency' => 'USD',
@@ -99,16 +109,18 @@ it('marks the order as failed when processing throws after the order can be iden
     Log::shouldReceive('warning')
         ->once()
         ->with('Failed to process order message', Mockery::subset([
-            'message_id' => 'message-999',
-            'order_id' => 'order-999',
+            'message_id' => '11111111-1111-1111-1111-111111111999',
+            'order_id' => '11111111-1111-1111-1111-111111111999',
         ]));
 
     app(OrderMessageHandler::class)->handle([
-        'id' => 'message-999',
+        'id' => '11111111-1111-1111-1111-111111111999',
         'type' => 'orders.cancelled',
+        'schema_version' => 1,
+        'producer' => 'gateway-api',
         'occurred_at' => '2026-04-19T18:00:00+00:00',
         'order' => [
-            'order_id' => 'order-999',
+            'order_id' => '11111111-1111-1111-1111-111111111999',
             'customer_email' => 'customer@example.com',
             'amount' => 149.99,
             'currency' => 'USD',
@@ -121,11 +133,13 @@ it('stores a failed status for a rejected but identifiable order', function () {
 
     try {
         app(OrderMessageHandler::class)->handle([
-            'id' => 'message-999',
+            'id' => '11111111-1111-1111-1111-111111111999',
             'type' => 'orders.cancelled',
+            'schema_version' => 1,
+            'producer' => 'gateway-api',
             'occurred_at' => '2026-04-19T18:00:00+00:00',
             'order' => [
-                'order_id' => 'order-999',
+                'order_id' => '11111111-1111-1111-1111-111111111999',
                 'customer_email' => 'customer@example.com',
                 'amount' => 149.99,
                 'currency' => 'USD',
@@ -135,7 +149,23 @@ it('stores a failed status for a rejected but identifiable order', function () {
     }
 
     $this->assertDatabaseHas('orders', [
-        'external_order_id' => 'order-999',
+        'external_order_id' => '11111111-1111-1111-1111-111111111999',
         'status' => Order::STATUS_FAILED,
     ]);
 });
+
+it('rejects malformed payload fields with a clear validation error', function () {
+    app(OrderMessageHandler::class)->handle([
+        'id' => 'not-a-uuid',
+        'type' => 'orders.created',
+        'schema_version' => 1,
+        'producer' => 'gateway-api',
+        'occurred_at' => 'invalid-date',
+        'order' => [
+            'order_id' => 'not-a-uuid',
+            'customer_email' => 'bad-email',
+            'amount' => 0,
+            'currency' => 'USDT',
+        ],
+    ]);
+})->throws(InvalidArgumentException::class, 'RabbitMQ payload must contain valid UUID values.');

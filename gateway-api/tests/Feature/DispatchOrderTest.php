@@ -7,6 +7,8 @@ it('accepts an order and returns the dispatch metadata', function () {
         'message_id' => 'message-123',
         'queue' => 'orders',
         'type' => 'orders.created',
+        'schema_version' => 1,
+        'producer' => 'gateway-api',
         'occurred_at' => '2026-04-19T18:00:00+00:00',
         'order' => [
             'order_id' => 'order-123',
@@ -40,6 +42,8 @@ it('accepts an order and returns the dispatch metadata', function () {
             'message_id' => 'message-123',
             'queue' => 'orders',
             'event' => 'orders.created',
+            'schema_version' => 1,
+            'producer' => 'gateway-api',
             'occurred_at' => '2026-04-19T18:00:00+00:00',
             'order' => [
                 'order_id' => 'order-123',

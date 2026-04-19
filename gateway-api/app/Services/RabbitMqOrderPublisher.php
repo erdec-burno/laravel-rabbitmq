@@ -19,6 +19,8 @@ class RabbitMqOrderPublisher
      *     message_id: string,
      *     queue: string,
      *     type: string,
+     *     schema_version: int,
+     *     producer: string,
      *     occurred_at: string,
      *     order: array{
      *         order_id: string,
@@ -35,6 +37,8 @@ class RabbitMqOrderPublisher
         $payload = [
             'id' => (string) Str::uuid(),
             'type' => 'orders.created',
+            'schema_version' => 1,
+            'producer' => 'gateway-api',
             'occurred_at' => now()->toIso8601String(),
             'order' => [
                 'order_id' => (string) Str::uuid(),
@@ -54,6 +58,8 @@ class RabbitMqOrderPublisher
             'message_id' => $payload['id'],
             'queue' => $queueName,
             'type' => $payload['type'],
+            'schema_version' => $payload['schema_version'],
+            'producer' => $payload['producer'],
             'occurred_at' => $payload['occurred_at'],
             'order' => $payload['order'],
         ];

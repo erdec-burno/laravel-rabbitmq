@@ -10,6 +10,8 @@ use Illuminate\Http\Resources\Json\JsonResource;
  *     message_id: string,
  *     queue: string,
  *     type: string,
+ *     schema_version: int,
+ *     producer: string,
  *     occurred_at: string,
  *     order: array{
  *         order_id: string,
@@ -33,6 +35,8 @@ class OrderDispatchResource extends JsonResource
             'message_id' => $this['message_id'],
             'queue' => $this['queue'],
             'event' => $this['type'],
+            'schema_version' => $this['schema_version'],
+            'producer' => $this['producer'],
             'occurred_at' => $this['occurred_at'],
             'order' => $this['order'],
         ];
