@@ -12,6 +12,12 @@ class Order extends Model
     /** @use HasFactory<OrderFactory> */
     use HasFactory;
 
+    public const STATUS_RECEIVED = 'received';
+
+    public const STATUS_PROCESSED = 'processed';
+
+    public const STATUS_FAILED = 'failed';
+
     /**
      * The attributes that are mass assignable.
      *
@@ -37,6 +43,14 @@ class Order extends Model
             'amount' => 'decimal:2',
             'received_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Get the route key for the model.
+     */
+    public function getRouteKeyName(): string
+    {
+        return 'external_order_id';
     }
 
     /**

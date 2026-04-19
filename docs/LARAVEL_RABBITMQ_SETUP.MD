@@ -5,7 +5,7 @@
 В проекте созданы два Laravel 12 приложения:
 
 - `gateway-api` — HTTP API для приема заказов
-- `worker-service` — consumer для обработки сообщений из RabbitMQ
+- `worker-service` — consumer и read-only API для просмотра обработанных заказов
 
 В обоих приложениях установлен пакет `vladimir-yuldashev/laravel-queue-rabbitmq`.
 
@@ -102,24 +102,25 @@
 - миграция `processed_order_messages`
 - фабрики для тестов
 
-Handler теперь:
+## Статусы заказа
 
-1. Проверяет тип сообщения, структуру payload и обязательные поля заказа.
-2. Создает или находит доменную сущность заказа в таблице `orders`.
-3. Создает или находит запись в журнале `processed_order_messages`.
-4. Связывает обработанное сообщение с заказом.
-5. Сохраняет исходный `payload` целиком в JSON.
-6. Использует idempotency по `message_id`, чтобы одно и то же сообщение не записывалось повторно.
+Для заказов введены статусы:
 
-Из payload извлекаются:
+- `received`
+- `processed`
+- `failed`
 
-- `message_id`
-- `message_type`
-- `order_id`
-- `customer_email`
-- `amount`
-- `currency`
-- `occurred_at`
+Логика статусов:
+
+1. Когда заказ идентифицирован и запись создается впервые, он получает статус `received`.
+2. После успешного создания записи в `processed_order_messages` заказ переводится в `processed`.
+3. Если в ходе обработки возникает ошибка, а заказ можно идентифицировать по payload, он переводится в `failed`.
+
+Практический смысл:
+
+- `received` — заказ получен и распознан, но обработка еще не завершена
+- `processed` — заказ успешно обработан и записан
+- `failed` — обработка завершилась ошибкой
 
 ## Разделение данных
 
@@ -241,6 +242,69 @@ processed_order_messages
 }
 ```
 
+## API просмотра заказов
+
+В `worker-service` добавлен read-only API:
+
+- `GET /api/orders`
+- `GET /api/orders/{external_order_id}`
+
+Файлы:
+
+- `worker-service/routes/api.php`
+- `worker-service/app/Http/Controllers/Api/OrderController.php`
+- `worker-service/app/Http/Resources/OrderResource.php`
+
+### `GET /api/orders`
+
+Возвращает список заказов с пагинацией.
+
+Для каждой записи возвращаются:
+
+- `id`
+- `external_order_id`
+- `customer_email`
+- `amount`
+- `currency`
+- `status`
+- `received_at`
+- `processed_messages_count`
+
+### `GET /api/orders/{external_order_id}`
+
+Возвращает один заказ по внешнему идентификатору.
+
+Дополнительно возвращает список связанных сообщений обработки:
+
+- `message_id`
+- `message_type`
+- `occurred_at`
+- `processed_at`
+
+Пример ответа:
+
+```json
+{
+  "data": {
+    "id": 1,
+    "external_order_id": "order-123",
+    "customer_email": "customer@example.com",
+    "amount": 149.99,
+    "currency": "USD",
+    "status": "processed",
+    "received_at": "2026-04-19T18:00:00+00:00",
+    "processed_messages": [
+      {
+        "message_id": "message-123",
+        "message_type": "orders.created",
+        "occurred_at": "2026-04-19T18:00:00+00:00",
+        "processed_at": "2026-04-19T18:00:02+00:00"
+      }
+    ]
+  }
+}
+```
+
 ## Проверка через SQL
 
 Посмотреть все сохраненные заказы:
@@ -254,7 +318,7 @@ ORDER BY id DESC;
 Посмотреть все обработанные сообщения вместе с заказами:
 
 ```sql
-SELECT pm.id, pm.message_id, pm.message_type, o.external_order_id, o.customer_email, o.amount, o.currency, pm.processed_at
+SELECT pm.id, pm.message_id, pm.message_type, o.external_order_id, o.customer_email, o.amount, o.currency, o.status, pm.processed_at
 FROM processed_order_messages pm
 JOIN orders o ON o.id = pm.order_id
 ORDER BY pm.id DESC;
@@ -316,6 +380,8 @@ HAVING COUNT(*) > 1;
 - сохранения заказа в таблицу `orders`
 - сохранения обработанного сообщения в `processed_order_messages`
 - защиты от повторной обработки одного и того же сообщения без дублей в обеих таблицах
+- статусов `processed` и `failed`
+- API просмотра заказов
 
 Команды проверки:
 
@@ -344,12 +410,24 @@ docker compose up --build
 
 ## Ручная проверка API
 
-Пример через `curl`:
+Пример отправки заказа:
 
 ```powershell
 curl -Method POST http://localhost:8000/api/orders `
   -Headers @{ "Content-Type" = "application/json" } `
   -Body '{"customer_email":"customer@example.com","amount":149.99,"currency":"usd"}'
+```
+
+Пример просмотра списка заказов:
+
+```powershell
+curl http://localhost:8000/api/orders
+```
+
+Пример просмотра одного заказа:
+
+```powershell
+curl http://localhost:8000/api/orders/order-123
 ```
 
 Ожидаемый результат:
@@ -359,6 +437,11 @@ curl -Method POST http://localhost:8000/api/orders `
 - `worker-service` читает и обрабатывает сообщение
 - `worker-service` сохраняет заказ в `orders`
 - `worker-service` сохраняет запись в `processed_order_messages`
+- заказ получает статус `processed`
+
+Если обработка падает, а заказ можно идентифицировать:
+
+- заказ сохраняется или обновляется со статусом `failed`
 
 ## Важный нюанс
 

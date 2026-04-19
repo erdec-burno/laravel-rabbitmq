@@ -41,7 +41,7 @@ it('stores the order and processed message in the database', function () {
         'customer_email' => 'customer@example.com',
         'amount' => 149.99,
         'currency' => 'USD',
-        'status' => 'processed',
+        'status' => Order::STATUS_PROCESSED,
     ]);
 
     $this->assertDatabaseHas('processed_order_messages', [
@@ -58,6 +58,7 @@ it('does not create a duplicate order or message for the same payload', function
         ->with('Skipped duplicate order message', [
             'message_id' => 'message-123',
             'order_id' => 'order-123',
+            'status' => Order::STATUS_PROCESSED,
         ]);
 
     $payload = [
@@ -93,3 +94,48 @@ it('rejects unsupported message types', function () {
         ],
     ]);
 })->throws(InvalidArgumentException::class, 'Unsupported RabbitMQ message type.');
+
+it('marks the order as failed when processing throws after the order can be identified', function () {
+    Log::shouldReceive('warning')
+        ->once()
+        ->with('Failed to process order message', Mockery::subset([
+            'message_id' => 'message-999',
+            'order_id' => 'order-999',
+        ]));
+
+    app(OrderMessageHandler::class)->handle([
+        'id' => 'message-999',
+        'type' => 'orders.cancelled',
+        'occurred_at' => '2026-04-19T18:00:00+00:00',
+        'order' => [
+            'order_id' => 'order-999',
+            'customer_email' => 'customer@example.com',
+            'amount' => 149.99,
+            'currency' => 'USD',
+        ],
+    ]);
+})->throws(InvalidArgumentException::class, 'Unsupported RabbitMQ message type.');
+
+it('stores a failed status for a rejected but identifiable order', function () {
+    Log::shouldReceive('warning')->once();
+
+    try {
+        app(OrderMessageHandler::class)->handle([
+            'id' => 'message-999',
+            'type' => 'orders.cancelled',
+            'occurred_at' => '2026-04-19T18:00:00+00:00',
+            'order' => [
+                'order_id' => 'order-999',
+                'customer_email' => 'customer@example.com',
+                'amount' => 149.99,
+                'currency' => 'USD',
+            ],
+        ]);
+    } catch (InvalidArgumentException) {
+    }
+
+    $this->assertDatabaseHas('orders', [
+        'external_order_id' => 'order-999',
+        'status' => Order::STATUS_FAILED,
+    ]);
+});
