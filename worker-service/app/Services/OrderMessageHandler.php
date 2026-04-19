@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Models\ProcessedOrderMessage;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
 
@@ -22,19 +24,42 @@ class OrderMessageHandler
      *     }
      * } $payload
      */
-    public function handle(array $payload): void
+    public function handle(array $payload): ProcessedOrderMessage
     {
         $this->assertValidPayload($payload);
 
-        Log::info('Processed order message', [
-            'message_id' => $payload['id'],
-            'event' => $payload['type'],
-            'occurred_at' => $payload['occurred_at'],
-            'order_id' => $payload['order']['order_id'],
-            'customer_email' => $payload['order']['customer_email'],
-            'amount' => (float) $payload['order']['amount'],
-            'currency' => $payload['order']['currency'],
-        ]);
+        $processedMessage = ProcessedOrderMessage::query()->firstOrCreate(
+            ['message_id' => $payload['id']],
+            [
+                'message_type' => $payload['type'],
+                'order_id' => $payload['order']['order_id'],
+                'customer_email' => $payload['order']['customer_email'],
+                'amount' => round((float) $payload['order']['amount'], 2),
+                'currency' => strtoupper($payload['order']['currency']),
+                'occurred_at' => Carbon::parse($payload['occurred_at']),
+                'processed_at' => now(),
+                'payload' => $payload,
+            ],
+        );
+
+        if ($processedMessage->wasRecentlyCreated) {
+            Log::info('Processed order message', [
+                'message_id' => $processedMessage->message_id,
+                'event' => $processedMessage->message_type,
+                'occurred_at' => $processedMessage->occurred_at?->toIso8601String(),
+                'order_id' => $processedMessage->order_id,
+                'customer_email' => $processedMessage->customer_email,
+                'amount' => (float) $processedMessage->amount,
+                'currency' => $processedMessage->currency,
+            ]);
+        } else {
+            Log::info('Skipped duplicate order message', [
+                'message_id' => $processedMessage->message_id,
+                'order_id' => $processedMessage->order_id,
+            ]);
+        }
+
+        return $processedMessage;
     }
 
     /**
