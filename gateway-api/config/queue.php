@@ -1,5 +1,7 @@
 <?php
 
+use PhpAmqpLib\Connection\AMQPLazyConnection;
+
 return [
 
     /*
@@ -70,6 +72,29 @@ return [
             'retry_after' => (int) env('REDIS_QUEUE_RETRY_AFTER', 90),
             'block_for' => null,
             'after_commit' => false,
+        ],
+
+        'rabbitmq' => [
+            'driver' => 'rabbitmq',
+            'queue' => env('RABBITMQ_QUEUE', 'orders'),
+            'connection' => AMQPLazyConnection::class,
+            'hosts' => [
+                [
+                    'host' => env('RABBITMQ_HOST', 'rabbitmq'),
+                    'port' => (int) env('RABBITMQ_PORT', 5672),
+                    'user' => env('RABBITMQ_USERNAME', 'app'),
+                    'password' => env('RABBITMQ_PASSWORD', 'app'),
+                    'vhost' => env('RABBITMQ_VHOST', '/'),
+                ],
+            ],
+            'options' => [
+                'lazy' => true,
+                'network_protocol' => 'tcp',
+                'connection_timeout' => (float) env('RABBITMQ_CONNECTION_TIMEOUT', 3.0),
+                'read_timeout' => (float) env('RABBITMQ_READ_TIMEOUT', 3.0),
+                'write_timeout' => (float) env('RABBITMQ_WRITE_TIMEOUT', 3.0),
+                'heartbeat' => (int) env('RABBITMQ_HEARTBEAT', 0),
+            ],
         ],
 
     ],
