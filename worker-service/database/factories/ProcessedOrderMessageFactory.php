@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Models\Order;
 use App\Models\ProcessedOrderMessage;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
@@ -17,13 +18,12 @@ class ProcessedOrderMessageFactory extends Factory
      */
     public function definition(): array
     {
+        $order = Order::factory()->create();
+
         return [
             'message_id' => (string) fake()->uuid(),
             'message_type' => 'orders.created',
-            'order_id' => (string) fake()->uuid(),
-            'customer_email' => fake()->safeEmail(),
-            'amount' => fake()->randomFloat(2, 1, 5000),
-            'currency' => 'USD',
+            'order_id' => $order->id,
             'occurred_at' => now()->subMinute(),
             'processed_at' => now(),
             'payload' => [
@@ -31,10 +31,10 @@ class ProcessedOrderMessageFactory extends Factory
                 'type' => 'orders.created',
                 'occurred_at' => now()->toIso8601String(),
                 'order' => [
-                    'order_id' => (string) fake()->uuid(),
-                    'customer_email' => fake()->safeEmail(),
-                    'amount' => fake()->randomFloat(2, 1, 5000),
-                    'currency' => 'USD',
+                    'order_id' => $order->external_order_id,
+                    'customer_email' => $order->customer_email,
+                    'amount' => (float) $order->amount,
+                    'currency' => $order->currency,
                 ],
             ],
         ];

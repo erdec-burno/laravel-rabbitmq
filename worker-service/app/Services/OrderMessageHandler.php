@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Order;
 use App\Models\ProcessedOrderMessage;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
@@ -28,14 +29,22 @@ class OrderMessageHandler
     {
         $this->assertValidPayload($payload);
 
+        $order = Order::query()->firstOrCreate(
+            ['external_order_id' => $payload['order']['order_id']],
+            [
+                'customer_email' => $payload['order']['customer_email'],
+                'amount' => round((float) $payload['order']['amount'], 2),
+                'currency' => strtoupper($payload['order']['currency']),
+                'status' => 'processed',
+                'received_at' => Carbon::parse($payload['occurred_at']),
+            ],
+        );
+
         $processedMessage = ProcessedOrderMessage::query()->firstOrCreate(
             ['message_id' => $payload['id']],
             [
                 'message_type' => $payload['type'],
-                'order_id' => $payload['order']['order_id'],
-                'customer_email' => $payload['order']['customer_email'],
-                'amount' => round((float) $payload['order']['amount'], 2),
-                'currency' => strtoupper($payload['order']['currency']),
+                'order_id' => $order->id,
                 'occurred_at' => Carbon::parse($payload['occurred_at']),
                 'processed_at' => now(),
                 'payload' => $payload,
@@ -47,15 +56,15 @@ class OrderMessageHandler
                 'message_id' => $processedMessage->message_id,
                 'event' => $processedMessage->message_type,
                 'occurred_at' => $processedMessage->occurred_at?->toIso8601String(),
-                'order_id' => $processedMessage->order_id,
-                'customer_email' => $processedMessage->customer_email,
-                'amount' => (float) $processedMessage->amount,
-                'currency' => $processedMessage->currency,
+                'order_id' => $order->external_order_id,
+                'customer_email' => $order->customer_email,
+                'amount' => (float) $order->amount,
+                'currency' => $order->currency,
             ]);
         } else {
             Log::info('Skipped duplicate order message', [
                 'message_id' => $processedMessage->message_id,
-                'order_id' => $processedMessage->order_id,
+                'order_id' => $order->external_order_id,
             ]);
         }
 

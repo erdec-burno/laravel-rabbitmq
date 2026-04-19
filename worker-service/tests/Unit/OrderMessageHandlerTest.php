@@ -1,10 +1,11 @@
 <?php
 
+use App\Models\Order;
 use App\Models\ProcessedOrderMessage;
 use App\Services\OrderMessageHandler;
 use Illuminate\Support\Facades\Log;
 
-it('stores a processed order message in the database', function () {
+it('stores the order and processed message in the database', function () {
     Log::shouldReceive('info')
         ->once()
         ->with('Processed order message', Mockery::subset([
@@ -30,17 +31,27 @@ it('stores a processed order message in the database', function () {
 
     expect($processedMessage->message_id)->toBe('message-123');
 
-    $this->assertDatabaseHas('processed_order_messages', [
-        'message_id' => 'message-123',
-        'message_type' => 'orders.created',
-        'order_id' => 'order-123',
+    $order = Order::query()->first();
+
+    expect($order)->not->toBeNull();
+    expect($processedMessage->order_id)->toBe($order->id);
+
+    $this->assertDatabaseHas('orders', [
+        'external_order_id' => 'order-123',
         'customer_email' => 'customer@example.com',
         'amount' => 149.99,
         'currency' => 'USD',
+        'status' => 'processed',
+    ]);
+
+    $this->assertDatabaseHas('processed_order_messages', [
+        'message_id' => 'message-123',
+        'message_type' => 'orders.created',
+        'order_id' => $order->id,
     ]);
 });
 
-it('does not create a duplicate record for the same message', function () {
+it('does not create a duplicate order or message for the same payload', function () {
     Log::shouldReceive('info')->once()->with('Processed order message', Mockery::any());
     Log::shouldReceive('info')
         ->once()
@@ -65,6 +76,7 @@ it('does not create a duplicate record for the same message', function () {
     $second = app(OrderMessageHandler::class)->handle($payload);
 
     expect($first->is($second))->toBeTrue();
+    expect(Order::query()->count())->toBe(1);
     expect(ProcessedOrderMessage::query()->count())->toBe(1);
 });
 
