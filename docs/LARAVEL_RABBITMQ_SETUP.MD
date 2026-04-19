@@ -86,7 +86,55 @@
 2. Сообщение оборачивается в custom job `IncomingOrderRabbitMQJob`.
 3. Job передаёт payload в `OrderMessageHandler`.
 4. Handler проверяет структуру сообщения.
-5. При успешной обработке сообщение логируется и подтверждается.
+5. Handler сохраняет результат обработки в БД.
+6. При успешной обработке сообщение логируется и подтверждается.
+
+### Бизнес-логика обработки заказа
+
+В `worker-service` добавлена модель:
+
+- `worker-service/app/Models/ProcessedOrderMessage.php`
+
+Добавлены:
+
+- миграция `processed_order_messages`
+- фабрика для тестов
+
+Handler теперь:
+
+1. Проверяет тип сообщения, структуру payload и обязательные поля заказа.
+2. Извлекает:
+   - `message_id`
+   - `message_type`
+   - `order_id`
+   - `customer_email`
+   - `amount`
+   - `currency`
+   - `occurred_at`
+3. Сохраняет запись в таблицу `processed_order_messages`.
+4. Сохраняет исходный `payload` целиком в JSON.
+5. Использует idempotency по `message_id`, чтобы одно и то же сообщение не записывалось повторно.
+
+Если сообщение приходит повторно:
+
+- новая запись в БД не создаётся;
+- обработчик логирует пропуск дубля.
+
+### Структура таблицы processed_order_messages
+
+Таблица хранит:
+
+- `message_id`
+- `message_type`
+- `order_id`
+- `customer_email`
+- `amount`
+- `currency`
+- `occurred_at`
+- `processed_at`
+- `payload`
+- `created_at`
+- `updated_at`
 
 ## Конфигурация RabbitMQ
 
@@ -124,6 +172,8 @@
 - API endpoint в `gateway-api`
 - обработки сообщения в `worker-service`
 - custom RabbitMQ job wrapper в `worker-service`
+- сохранения обработанного сообщения в БД
+- защиты от повторной обработки одного и того же сообщения
 
 Команды проверки:
 
@@ -133,6 +183,9 @@ php artisan test --compact
 
 cd ..\worker-service
 php artisan test --compact
+
+cd ..\worker-service
+php artisan migrate
 ```
 
 ## Запуск проекта
@@ -164,6 +217,7 @@ curl -Method POST http://localhost:8000/api/orders `
 - API возвращает `202 Accepted`
 - сообщение попадает в очередь `orders`
 - `worker-service` читает и обрабатывает сообщение
+- `worker-service` сохраняет запись в `processed_order_messages`
 
 ## Важный нюанс
 
