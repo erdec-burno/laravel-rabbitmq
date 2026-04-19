@@ -2,10 +2,12 @@
 
 namespace App\Services;
 
+use App\Models\Order;
 use App\Models\ProcessedOrderMessage;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
+use Throwable;
 
 class OrderMessageHandler
 {
@@ -26,40 +28,74 @@ class OrderMessageHandler
      */
     public function handle(array $payload): ProcessedOrderMessage
     {
-        $this->assertValidPayload($payload);
+        $order = null;
 
-        $processedMessage = ProcessedOrderMessage::query()->firstOrCreate(
-            ['message_id' => $payload['id']],
-            [
-                'message_type' => $payload['type'],
-                'order_id' => $payload['order']['order_id'],
-                'customer_email' => $payload['order']['customer_email'],
-                'amount' => round((float) $payload['order']['amount'], 2),
-                'currency' => strtoupper($payload['order']['currency']),
-                'occurred_at' => Carbon::parse($payload['occurred_at']),
-                'processed_at' => now(),
-                'payload' => $payload,
-            ],
-        );
+        try {
+            $this->assertValidPayload($payload);
 
-        if ($processedMessage->wasRecentlyCreated) {
-            Log::info('Processed order message', [
-                'message_id' => $processedMessage->message_id,
-                'event' => $processedMessage->message_type,
-                'occurred_at' => $processedMessage->occurred_at?->toIso8601String(),
-                'order_id' => $processedMessage->order_id,
-                'customer_email' => $processedMessage->customer_email,
-                'amount' => (float) $processedMessage->amount,
-                'currency' => $processedMessage->currency,
+            $order = Order::query()->firstOrCreate(
+                ['external_order_id' => $payload['order']['order_id']],
+                [
+                    'customer_email' => $payload['order']['customer_email'],
+                    'amount' => round((float) $payload['order']['amount'], 2),
+                    'currency' => strtoupper($payload['order']['currency']),
+                    'status' => Order::STATUS_RECEIVED,
+                    'received_at' => Carbon::parse($payload['occurred_at']),
+                ],
+            );
+
+            if ($order->status !== Order::STATUS_PROCESSED) {
+                $order->forceFill([
+                    'status' => Order::STATUS_RECEIVED,
+                ])->save();
+            }
+
+            $processedMessage = ProcessedOrderMessage::query()->firstOrCreate(
+                ['message_id' => $payload['id']],
+                [
+                    'message_type' => $payload['type'],
+                    'order_id' => $order->id,
+                    'occurred_at' => Carbon::parse($payload['occurred_at']),
+                    'processed_at' => now(),
+                    'payload' => $payload,
+                ],
+            );
+
+            if ($processedMessage->wasRecentlyCreated) {
+                $order->forceFill([
+                    'status' => Order::STATUS_PROCESSED,
+                ])->save();
+
+                Log::info('Processed order message', [
+                    'message_id' => $processedMessage->message_id,
+                    'event' => $processedMessage->message_type,
+                    'occurred_at' => $processedMessage->occurred_at?->toIso8601String(),
+                    'order_id' => $order->external_order_id,
+                    'customer_email' => $order->customer_email,
+                    'amount' => (float) $order->amount,
+                    'currency' => $order->currency,
+                    'status' => $order->status,
+                ]);
+            } else {
+                Log::info('Skipped duplicate order message', [
+                    'message_id' => $processedMessage->message_id,
+                    'order_id' => $order->external_order_id,
+                    'status' => $order->status,
+                ]);
+            }
+
+            return $processedMessage;
+        } catch (Throwable $exception) {
+            $order = $this->markOrderAsFailed($payload, $order);
+
+            Log::warning('Failed to process order message', [
+                'message_id' => $payload['id'] ?? null,
+                'order_id' => $order?->external_order_id,
+                'error' => $exception->getMessage(),
             ]);
-        } else {
-            Log::info('Skipped duplicate order message', [
-                'message_id' => $processedMessage->message_id,
-                'order_id' => $processedMessage->order_id,
-            ]);
+
+            throw $exception;
         }
-
-        return $processedMessage;
     }
 
     /**
@@ -86,5 +122,47 @@ class OrderMessageHandler
         ) {
             throw new InvalidArgumentException('Order payload is missing required fields.');
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function markOrderAsFailed(array $payload, ?Order $order): ?Order
+    {
+        if ($order) {
+            $order->forceFill([
+                'status' => Order::STATUS_FAILED,
+            ])->save();
+
+            return $order;
+        }
+
+        $messageType = $payload['type'] ?? null;
+        $orderPayload = $payload['order'] ?? null;
+        $occurredAt = $payload['occurred_at'] ?? null;
+
+        if (
+            ! is_array($orderPayload)
+            || ! is_string($messageType)
+            || ! is_string($occurredAt)
+            || ! isset($orderPayload['order_id'], $orderPayload['customer_email'], $orderPayload['amount'], $orderPayload['currency'])
+            || ! is_string($orderPayload['order_id'])
+            || ! is_string($orderPayload['customer_email'])
+            || ! is_numeric($orderPayload['amount'])
+            || ! is_string($orderPayload['currency'])
+        ) {
+            return null;
+        }
+
+        return Order::query()->updateOrCreate(
+            ['external_order_id' => $orderPayload['order_id']],
+            [
+                'customer_email' => $orderPayload['customer_email'],
+                'amount' => round((float) $orderPayload['amount'], 2),
+                'currency' => strtoupper($orderPayload['currency']),
+                'status' => Order::STATUS_FAILED,
+                'received_at' => Carbon::parse($occurredAt),
+            ],
+        );
     }
 }

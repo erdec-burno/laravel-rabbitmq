@@ -15,10 +15,7 @@ return new class extends Migration
             $table->id();
             $table->uuid('message_id')->unique();
             $table->string('message_type');
-            $table->uuid('order_id');
-            $table->string('customer_email');
-            $table->decimal('amount', 12, 2);
-            $table->string('currency', 3);
+            $table->foreignId('order_id')->constrained()->cascadeOnDelete();
             $table->timestamp('occurred_at');
             $table->timestamp('processed_at');
             $table->json('payload');

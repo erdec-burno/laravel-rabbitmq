@@ -2,29 +2,29 @@
 
 ## Что реализовано
 
-В проекте созданы два Laravel 12 приложения:
+В репозитории подготовлены два Laravel 12 сервиса:
 
-- `gateway-api` — HTTP API для приёма заказов
-- `worker-service` — consumer для обработки сообщений из RabbitMQ
+- `gateway-api` — принимает HTTP-запросы и публикует сообщения в RabbitMQ
+- `worker-service` — читает сообщения из RabbitMQ, сохраняет результат в БД и отдает read-only API
 
-В обоих приложениях установлен пакет `vladimir-yuldashev/laravel-queue-rabbitmq`.
+В обоих приложениях используется пакет `vladimir-yuldashev/laravel-queue-rabbitmq`.
 
-Также настроены:
+Дополнительно настроены:
 
-- Pest в обоих приложениях
+- Pest
 - Dockerfile для обоих сервисов
 - `ext-sockets` внутри Docker runtime
-- базовая конфигурация RabbitMQ в `config/queue.php` и `config/rabbitmq.php`
+- базовая RabbitMQ-конфигурация
 
-## Реализованный сценарий
+## Поток обработки
 
-### Gateway API
+### 1. Gateway API
 
 Добавлен endpoint:
 
 - `POST /api/orders`
 
-Файлы:
+Основные файлы:
 
 - `gateway-api/routes/api.php`
 - `gateway-api/app/Http/Controllers/Api/OrderDispatchController.php`
@@ -35,12 +35,10 @@
 Поведение:
 
 1. API принимает JSON заказа.
-2. Выполняется валидация:
-   - `customer_email`
-   - `amount`
-   - `currency`
-3. После успешной валидации сообщение публикуется в очередь `orders`.
-4. API возвращает `202 Accepted` с метаданными отправленного сообщения.
+2. Валидирует `customer_email`, `amount`, `currency`.
+3. Формирует сообщение `orders.created`.
+4. Публикует сообщение в очередь `orders`.
+5. Возвращает `202 Accepted`.
 
 Пример запроса:
 
@@ -52,7 +50,7 @@
 }
 ```
 
-Пример структуры сообщения:
+Пример payload сообщения:
 
 ```json
 {
@@ -68,13 +66,13 @@
 }
 ```
 
-### Worker Service
+### 2. Worker Service
 
 Добавлен consumer:
 
-- команда `php artisan rabbitmq:consume-orders`
+- `php artisan rabbitmq:consume-orders`
 
-Файлы:
+Основные файлы:
 
 - `worker-service/app/Console/Commands/ConsumeOrdersCommand.php`
 - `worker-service/app/Queue/Jobs/IncomingOrderRabbitMQJob.php`
@@ -83,142 +81,379 @@
 Поведение:
 
 1. Consumer читает сообщения из очереди `orders`.
-2. Сообщение оборачивается в custom job `IncomingOrderRabbitMQJob`.
-3. Job передаёт payload в `OrderMessageHandler`.
-4. Handler проверяет структуру сообщения.
-5. Handler сохраняет результат обработки в БД.
-6. При успешной обработке сообщение логируется и подтверждается.
+2. Сообщение оборачивается в `IncomingOrderRabbitMQJob`.
+3. Job передает payload в `OrderMessageHandler`.
+4. Handler валидирует структуру сообщения.
+5. Handler сохраняет бизнес-сущность заказа и журнал обработки.
+6. При успешной обработке сообщение подтверждается.
 
-### Бизнес-логика обработки заказа
+## Модель данных
 
-В `worker-service` добавлена модель:
+Используются две таблицы:
 
-- `worker-service/app/Models/ProcessedOrderMessage.php`
+- `orders`
+- `processed_order_messages`
 
-Добавлены:
+### ER-описание
 
-- миграция `processed_order_messages`
-- фабрика для тестов
+```text
+orders
+  id PK
+  external_order_id UNIQUE
+  customer_email
+  amount
+  currency
+  status
+  received_at
+  created_at
+  updated_at
 
-Handler теперь:
+processed_order_messages
+  id PK
+  message_id UNIQUE
+  message_type
+  order_id FK -> orders.id
+  occurred_at
+  processed_at
+  payload
+  created_at
+  updated_at
+```
 
-1. Проверяет тип сообщения, структуру payload и обязательные поля заказа.
-2. Извлекает:
-   - `message_id`
-   - `message_type`
-   - `order_id`
-   - `customer_email`
-   - `amount`
-   - `currency`
-   - `occurred_at`
-3. Сохраняет запись в таблицу `processed_order_messages`.
-4. Сохраняет исходный `payload` целиком в JSON.
-5. Использует idempotency по `message_id`, чтобы одно и то же сообщение не записывалось повторно.
+Связь:
 
-Если сообщение приходит повторно:
+- один `order` имеет много `processed_order_messages`
+- одна запись `processed_order_messages` принадлежит одному `order`
 
-- новая запись в БД не создаётся;
-- обработчик логирует пропуск дубля.
+Практический смысл:
 
-### Структура таблицы processed_order_messages
+- `orders` хранит доменную сущность заказа
+- `processed_order_messages` хранит журнал входящих RabbitMQ-сообщений
 
-Таблица хранит:
+## Статусы заказа
 
-- `message_id`
-- `message_type`
-- `order_id`
+В `worker-service` заказ проходит через статусы:
+
+- `received`
+- `processed`
+- `failed`
+
+Логика переходов:
+
+1. При первом распознавании заказа создается запись со статусом `received`.
+2. После успешного завершения обработки заказ получает статус `processed`.
+3. Если обработка завершается ошибкой и заказ удалось идентифицировать, он получает статус `failed`.
+
+## Idempotency
+
+Защита от дублей построена по `message_id`.
+
+Если то же сообщение приходит повторно:
+
+- новый `order` не создается
+- новая запись в `processed_order_messages` не создается
+- обработчик логирует пропуск дубля
+
+## Пример записей в БД
+
+Пример строки в `orders`:
+
+```json
+{
+  "id": 1,
+  "external_order_id": "order-123",
+  "customer_email": "customer@example.com",
+  "amount": "149.99",
+  "currency": "USD",
+  "status": "processed",
+  "received_at": "2026-04-19 18:00:00"
+}
+```
+
+Пример строки в `processed_order_messages`:
+
+```json
+{
+  "id": 1,
+  "message_id": "message-123",
+  "message_type": "orders.created",
+  "order_id": 1,
+  "occurred_at": "2026-04-19 18:00:00",
+  "processed_at": "2026-04-19 18:00:01",
+  "payload": {
+    "id": "message-123",
+    "type": "orders.created"
+  }
+}
+```
+
+## API просмотра заказов
+
+В `worker-service` добавлен read-only API:
+
+- `GET /api/orders`
+- `GET /api/orders/{external_order_id}`
+- `GET /api/processed-order-messages`
+- `GET /api/processed-order-messages/{message_id}`
+
+Основные файлы:
+
+- `worker-service/routes/api.php`
+- `worker-service/app/Http/Controllers/Api/OrderController.php`
+- `worker-service/app/Http/Resources/OrderResource.php`
+- `worker-service/app/Http/Requests/IndexOrderRequest.php`
+
+### `GET /api/orders`
+
+Возвращает пагинированный список заказов.
+
+Поля ответа:
+
+- `id`
+- `external_order_id`
 - `customer_email`
 - `amount`
 - `currency`
+- `status`
+- `received_at`
+- `processed_messages_count`
+
+Поддерживаемые фильтры:
+
+- `status=received|processed|failed`
+- `customer_email=partial-value`
+- `date_from=YYYY-MM-DD`
+- `date_to=YYYY-MM-DD`
+
+Примечания:
+
+- диапазон дат применяется к полю `received_at`
+- `date_to` должен быть больше или равен `date_from`
+
+Примеры:
+
+```text
+GET /api/orders?status=processed
+GET /api/orders?customer_email=customer@example.com
+GET /api/orders?status=failed&customer_email=example.com
+GET /api/orders?date_from=2026-04-10&date_to=2026-04-19
+GET /api/orders?status=processed&date_from=2026-04-01&date_to=2026-04-30
+```
+
+### `GET /api/orders/{external_order_id}`
+
+Возвращает один заказ по внешнему идентификатору.
+
+Дополнительно отдает связанные записи из `processed_order_messages`.
+
+Пример ответа:
+
+```json
+{
+  "data": {
+    "id": 1,
+    "external_order_id": "order-123",
+    "customer_email": "customer@example.com",
+    "amount": "149.99",
+    "currency": "USD",
+    "status": "processed",
+    "received_at": "2026-04-19T18:00:00.000000Z",
+    "processed_messages_count": 1,
+    "processed_messages": [
+      {
+        "message_id": "message-123",
+        "message_type": "orders.created",
+        "occurred_at": "2026-04-19T18:00:00.000000Z",
+        "processed_at": "2026-04-19T18:00:01.000000Z"
+      }
+    ]
+  }
+}
+```
+
+## API просмотра обработанных сообщений
+
+Отдельно от заказов доступны endpoints для журнала `processed_order_messages`:
+
+- `GET /api/processed-order-messages`
+- `GET /api/processed-order-messages/{message_id}`
+
+### `GET /api/processed-order-messages`
+
+Возвращает пагинированный список обработанных сообщений.
+
+Для каждой записи доступны:
+
+- `id`
+- `message_id`
+- `message_type`
 - `occurred_at`
 - `processed_at`
 - `payload`
-- `created_at`
-- `updated_at`
+- `order`
 
-## Конфигурация RabbitMQ
+Поддерживаемые фильтры:
 
-Используются переменные окружения:
+- `message_type=orders.created`
+- `message_id=partial-value`
+- `external_order_id=partial-value`
 
-- `RABBITMQ_HOST`
-- `RABBITMQ_PORT`
-- `RABBITMQ_USERNAME`
-- `RABBITMQ_PASSWORD`
-- `RABBITMQ_VHOST`
-- `RABBITMQ_QUEUE`
-- `RABBITMQ_CONNECTION_TIMEOUT`
-- `RABBITMQ_READ_TIMEOUT`
-- `RABBITMQ_WRITE_TIMEOUT`
-- `RABBITMQ_HEARTBEAT`
+### `GET /api/processed-order-messages/{message_id}`
 
-Текущая очередь:
+Возвращает одно обработанное сообщение по `message_id`.
 
-- `orders`
+В ответе также присутствует краткая информация о связанном заказе:
 
-## Docker
+- `external_order_id`
+- `customer_email`
+- `amount`
+- `currency`
+- `status`
+- `received_at`
 
-`compose.yaml` поднимает:
+## SQL для проверки
 
-- `rabbitmq`
-- `gateway`
-- `worker`
+Список заказов:
 
-В `Dockerfile` обоих Laravel приложений включён `sockets`, потому что RabbitMQ-драйвер требует это расширение.
-
-## Тесты
-
-Покрытие добавлено для:
-
-- API endpoint в `gateway-api`
-- обработки сообщения в `worker-service`
-- custom RabbitMQ job wrapper в `worker-service`
-- сохранения обработанного сообщения в БД
-- защиты от повторной обработки одного и того же сообщения
-
-Команды проверки:
-
-```powershell
-cd gateway-api
-php artisan test --compact
-
-cd ..\worker-service
-php artisan test --compact
-
-cd ..\worker-service
-php artisan migrate
+```sql
+SELECT id, external_order_id, customer_email, amount, currency, status, received_at
+FROM orders
+ORDER BY id DESC;
 ```
 
-## Запуск проекта
+Журнал обработанных сообщений:
 
-Сборка и запуск:
+```sql
+SELECT id, message_id, message_type, order_id, occurred_at, processed_at
+FROM processed_order_messages
+ORDER BY id DESC;
+```
+
+Проверка связки заказа с сообщением:
+
+```sql
+SELECT pm.id, pm.message_id, pm.message_type, o.external_order_id,
+       o.customer_email, o.amount, o.currency, o.status, pm.processed_at
+FROM processed_order_messages pm
+JOIN orders o ON o.id = pm.order_id
+ORDER BY pm.id DESC;
+```
+
+Проверка дублей по `message_id`:
+
+```sql
+SELECT message_id, COUNT(*) AS duplicates_count
+FROM processed_order_messages
+GROUP BY message_id
+HAVING COUNT(*) > 1;
+```
+
+## Ручная проверка
+
+Запуск:
 
 ```powershell
 docker compose up --build
 ```
 
-После запуска:
-
-- RabbitMQ UI: `http://localhost:15672`
-- логин: `app`
-- пароль: `app`
-
-## Ручная проверка API
-
-Пример через `curl`:
+Отправка заказа:
 
 ```powershell
-curl -Method POST http://localhost:8000/api/orders `
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://localhost:8080/api/orders `
   -Headers @{ "Content-Type" = "application/json" } `
   -Body '{"customer_email":"customer@example.com","amount":149.99,"currency":"usd"}'
 ```
 
-Ожидаемый результат:
+Просмотр всех заказов:
 
-- API возвращает `202 Accepted`
-- сообщение попадает в очередь `orders`
-- `worker-service` читает и обрабатывает сообщение
-- `worker-service` сохраняет запись в `processed_order_messages`
+```powershell
+curl http://localhost:8000/api/orders
+```
+
+Фильтр по статусу:
+
+```powershell
+curl http://localhost:8000/api/orders?status=processed
+```
+
+Фильтр по email:
+
+```powershell
+curl http://localhost:8000/api/orders?customer_email=example.com
+```
+
+Фильтр по диапазону дат:
+
+```powershell
+curl "http://localhost:8000/api/orders?date_from=2026-04-10&date_to=2026-04-19"
+```
+
+Комбинированный фильтр:
+
+```powershell
+curl "http://localhost:8000/api/orders?status=processed&customer_email=example.com&date_from=2026-04-01&date_to=2026-04-30"
+```
+
+Просмотр одного заказа:
+
+```powershell
+curl http://localhost:8000/api/orders/order-123
+```
+
+Просмотр списка обработанных сообщений:
+
+```powershell
+curl http://localhost:8000/api/processed-order-messages
+```
+
+Фильтр по типу сообщения:
+
+```powershell
+curl "http://localhost:8000/api/processed-order-messages?message_type=orders.created"
+```
+
+Фильтр по части `message_id`:
+
+```powershell
+curl "http://localhost:8000/api/processed-order-messages?message_id=alpha"
+```
+
+Фильтр по части `external_order_id`:
+
+```powershell
+curl "http://localhost:8000/api/processed-order-messages?external_order_id=order-123"
+```
+
+Просмотр одного обработанного сообщения:
+
+```powershell
+curl http://localhost:8000/api/processed-order-messages/message-123
+```
+
+## Тесты
+
+Актуальная проверка `worker-service`:
+
+```powershell
+php artisan test --compact
+```
+
+Покрыто тестами:
+
+- сохранение обработанных сообщений
+- idempotency по `message_id`
+- статусы `received`, `processed`, `failed`
+- API списка заказов
+- API просмотра одного заказа
+- API списка обработанных сообщений
+- API просмотра одного обработанного сообщения
+- фильтрация по `status`
+- фильтрация по `customer_email`
+- фильтрация по диапазону `received_at`
 
 ## Важный нюанс
 
-На локальном Windows PHP отсутствует `ext-sockets`, поэтому пакет устанавливался с обходом локальной platform-проверки. Для реальной работы RabbitMQ нужно использовать Docker runtime, где `sockets` уже включён.
+На локальном Windows PHP может отсутствовать `ext-sockets`.
+Поэтому для реальной работы с RabbitMQ сервисы лучше запускать через Docker, где расширение уже установлено.
