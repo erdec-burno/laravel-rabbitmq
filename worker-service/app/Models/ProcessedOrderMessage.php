@@ -47,4 +47,12 @@ class ProcessedOrderMessage extends Model
     {
         return $this->belongsTo(Order::class);
     }
+
+    /**
+     * Get the route key for the model.
+     */
+    public function getRouteKeyName(): string
+    {
+        return 'message_id';
+    }
 }

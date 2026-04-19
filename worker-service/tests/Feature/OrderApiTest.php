@@ -62,6 +62,123 @@ it('returns a single stored order by external order id', function () {
     ]);
 });
 
+it('returns a paginated list of processed order messages', function () {
+    $order = Order::factory()->create([
+        'external_order_id' => 'order-processed-list',
+        'status' => Order::STATUS_PROCESSED,
+    ]);
+
+    ProcessedOrderMessage::factory()->create([
+        'order_id' => $order->id,
+        'message_id' => 'message-list-123',
+        'message_type' => 'orders.created',
+    ]);
+
+    $response = $this->getJson('/api/processed-order-messages');
+
+    $response->assertOk()->assertJsonFragment([
+        'message_id' => 'message-list-123',
+        'message_type' => 'orders.created',
+        'external_order_id' => 'order-processed-list',
+    ]);
+});
+
+it('returns a single processed order message by message id', function () {
+    $order = Order::factory()->create([
+        'external_order_id' => 'order-message-show',
+        'status' => Order::STATUS_PROCESSED,
+    ]);
+
+    ProcessedOrderMessage::factory()->create([
+        'order_id' => $order->id,
+        'message_id' => 'message-show-123',
+        'message_type' => 'orders.created',
+    ]);
+
+    $response = $this->getJson('/api/processed-order-messages/message-show-123');
+
+    $response->assertOk()->assertJson([
+        'data' => [
+            'message_id' => 'message-show-123',
+            'message_type' => 'orders.created',
+            'order' => [
+                'external_order_id' => 'order-message-show',
+                'status' => Order::STATUS_PROCESSED,
+            ],
+        ],
+    ]);
+});
+
+it('filters processed order messages by message type', function () {
+    ProcessedOrderMessage::factory()->create([
+        'message_id' => 'message-created-123',
+        'message_type' => 'orders.created',
+    ]);
+    ProcessedOrderMessage::factory()->create([
+        'message_id' => 'message-failed-123',
+        'message_type' => 'orders.failed',
+    ]);
+
+    $response = $this->getJson('/api/processed-order-messages?message_type=orders.failed');
+
+    $response->assertOk()
+        ->assertJsonFragment([
+            'message_id' => 'message-failed-123',
+            'message_type' => 'orders.failed',
+        ])
+        ->assertJsonMissing([
+            'message_id' => 'message-created-123',
+        ]);
+});
+
+it('filters processed order messages by partial message id', function () {
+    ProcessedOrderMessage::factory()->create([
+        'message_id' => 'message-alpha-123',
+    ]);
+    ProcessedOrderMessage::factory()->create([
+        'message_id' => 'message-bravo-456',
+    ]);
+
+    $response = $this->getJson('/api/processed-order-messages?message_id=alpha');
+
+    $response->assertOk()
+        ->assertJsonFragment([
+            'message_id' => 'message-alpha-123',
+        ])
+        ->assertJsonMissing([
+            'message_id' => 'message-bravo-456',
+        ]);
+});
+
+it('filters processed order messages by partial external order id', function () {
+    $alphaOrder = Order::factory()->create([
+        'external_order_id' => 'order-alpha-123',
+    ]);
+    $bravoOrder = Order::factory()->create([
+        'external_order_id' => 'order-bravo-456',
+    ]);
+
+    ProcessedOrderMessage::factory()->create([
+        'order_id' => $alphaOrder->id,
+        'message_id' => 'message-order-alpha',
+    ]);
+    ProcessedOrderMessage::factory()->create([
+        'order_id' => $bravoOrder->id,
+        'message_id' => 'message-order-bravo',
+    ]);
+
+    $response = $this->getJson('/api/processed-order-messages?external_order_id=alpha');
+
+    $response->assertOk()
+        ->assertJsonFragment([
+            'message_id' => 'message-order-alpha',
+            'external_order_id' => 'order-alpha-123',
+        ])
+        ->assertJsonMissing([
+            'message_id' => 'message-order-bravo',
+        ]);
+});
+
 it('filters orders by status', function () {
     Order::factory()->create([
         'external_order_id' => 'order-processed',

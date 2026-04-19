@@ -193,6 +193,8 @@ processed_order_messages
 
 - `GET /api/orders`
 - `GET /api/orders/{external_order_id}`
+- `GET /api/processed-order-messages`
+- `GET /api/processed-order-messages/{message_id}`
 
 Основные файлы:
 
@@ -268,6 +270,46 @@ GET /api/orders?status=processed&date_from=2026-04-01&date_to=2026-04-30
   }
 }
 ```
+
+## API просмотра обработанных сообщений
+
+Отдельно от заказов доступны endpoints для журнала `processed_order_messages`:
+
+- `GET /api/processed-order-messages`
+- `GET /api/processed-order-messages/{message_id}`
+
+### `GET /api/processed-order-messages`
+
+Возвращает пагинированный список обработанных сообщений.
+
+Для каждой записи доступны:
+
+- `id`
+- `message_id`
+- `message_type`
+- `occurred_at`
+- `processed_at`
+- `payload`
+- `order`
+
+Поддерживаемые фильтры:
+
+- `message_type=orders.created`
+- `message_id=partial-value`
+- `external_order_id=partial-value`
+
+### `GET /api/processed-order-messages/{message_id}`
+
+Возвращает одно обработанное сообщение по `message_id`.
+
+В ответе также присутствует краткая информация о связанном заказе:
+
+- `external_order_id`
+- `customer_email`
+- `amount`
+- `currency`
+- `status`
+- `received_at`
 
 ## SQL для проверки
 
@@ -360,6 +402,36 @@ curl "http://localhost:8000/api/orders?status=processed&customer_email=example.c
 curl http://localhost:8000/api/orders/order-123
 ```
 
+Просмотр списка обработанных сообщений:
+
+```powershell
+curl http://localhost:8000/api/processed-order-messages
+```
+
+Фильтр по типу сообщения:
+
+```powershell
+curl "http://localhost:8000/api/processed-order-messages?message_type=orders.created"
+```
+
+Фильтр по части `message_id`:
+
+```powershell
+curl "http://localhost:8000/api/processed-order-messages?message_id=alpha"
+```
+
+Фильтр по части `external_order_id`:
+
+```powershell
+curl "http://localhost:8000/api/processed-order-messages?external_order_id=order-123"
+```
+
+Просмотр одного обработанного сообщения:
+
+```powershell
+curl http://localhost:8000/api/processed-order-messages/message-123
+```
+
 ## Тесты
 
 Актуальная проверка `worker-service`:
@@ -375,6 +447,8 @@ php artisan test --compact
 - статусы `received`, `processed`, `failed`
 - API списка заказов
 - API просмотра одного заказа
+- API списка обработанных сообщений
+- API просмотра одного обработанного сообщения
 - фильтрация по `status`
 - фильтрация по `customer_email`
 - фильтрация по диапазону `received_at`
