@@ -7,4 +7,8 @@ RUN apt-get update \
     && docker-php-ext-install pdo pdo_sqlite sockets \
     && rm -rf /var/lib/apt/lists/*
 
-CMD ["php", "artisan", "rabbitmq:consume-orders", "--tries=3", "--sleep=1"]
+COPY docker/entrypoint-consumer.sh /usr/local/bin/entrypoint-consumer
+
+RUN chmod +x /usr/local/bin/entrypoint-consumer
+
+CMD ["entrypoint-consumer"]

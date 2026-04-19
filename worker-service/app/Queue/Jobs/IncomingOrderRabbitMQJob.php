@@ -3,6 +3,8 @@
 namespace App\Queue\Jobs;
 
 use App\Services\OrderMessageHandler;
+use Illuminate\Support\Facades\Log;
+use InvalidArgumentException;
 use JsonException;
 use VladimirYuldashev\LaravelQueueRabbitMQ\Queue\Jobs\RabbitMQJob as BaseRabbitMQJob;
 
@@ -15,11 +17,21 @@ class IncomingOrderRabbitMQJob extends BaseRabbitMQJob
      */
     public function fire(): void
     {
-        $payload = $this->payload();
+        try {
+            $payload = $this->payload();
 
-        ($this->instance = $this->resolve(OrderMessageHandler::class))->handle($payload);
+            ($this->instance = $this->resolve(OrderMessageHandler::class))->handle($payload);
 
-        $this->delete();
+            $this->delete();
+        } catch (JsonException|InvalidArgumentException $exception) {
+            Log::warning('Rejected RabbitMQ message without retry', [
+                'queue' => $this->getQueue(),
+                'job' => $this->getName(),
+                'error' => $exception->getMessage(),
+            ]);
+
+            $this->markAsFailed();
+        }
     }
 
     /**
