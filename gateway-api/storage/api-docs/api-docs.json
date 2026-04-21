@@ -1,0 +1,214 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+        "title": "Gateway API",
+        "description": "HTTP API for accepting orders and publishing them to RabbitMQ.",
+        "version": "1.0.0"
+    },
+    "servers": [
+        {
+            "url": "/",
+            "description": "Current gateway host"
+        }
+    ],
+    "paths": {
+        "/api/orders": {
+            "post": {
+                "tags": [
+                    "Orders"
+                ],
+                "summary": "Accept an order for asynchronous processing",
+                "operationId": "storeOrder",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/StoreOrderRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "202": {
+                        "description": "Order accepted and published to the queue.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/OrderDispatchResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "The submitted order payload is invalid.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "OrderDispatchResponse": {
+                "required": [
+                    "data"
+                ],
+                "properties": {
+                    "data": {
+                        "required": [
+                            "status",
+                            "message_id",
+                            "queue",
+                            "event",
+                            "schema_version",
+                            "producer",
+                            "occurred_at",
+                            "order"
+                        ],
+                        "properties": {
+                            "status": {
+                                "type": "string",
+                                "example": "accepted"
+                            },
+                            "message_id": {
+                                "type": "string",
+                                "example": "message-123"
+                            },
+                            "queue": {
+                                "type": "string",
+                                "example": "orders"
+                            },
+                            "event": {
+                                "type": "string",
+                                "example": "orders.created"
+                            },
+                            "schema_version": {
+                                "type": "integer",
+                                "example": 1
+                            },
+                            "producer": {
+                                "type": "string",
+                                "example": "gateway-api"
+                            },
+                            "occurred_at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "example": "2026-04-19T18:00:00+00:00"
+                            },
+                            "order": {
+                                "$ref": "#/components/schemas/Order"
+                            }
+                        },
+                        "type": "object"
+                    }
+                },
+                "type": "object"
+            },
+            "Order": {
+                "required": [
+                    "order_id",
+                    "customer_email",
+                    "amount",
+                    "currency"
+                ],
+                "properties": {
+                    "order_id": {
+                        "type": "string",
+                        "example": "order-123"
+                    },
+                    "customer_email": {
+                        "type": "string",
+                        "format": "email",
+                        "example": "customer@example.com"
+                    },
+                    "amount": {
+                        "type": "number",
+                        "format": "float",
+                        "example": 149.99
+                    },
+                    "currency": {
+                        "type": "string",
+                        "example": "USD"
+                    }
+                },
+                "type": "object"
+            },
+            "StoreOrderRequest": {
+                "required": [
+                    "customer_email",
+                    "amount",
+                    "currency"
+                ],
+                "properties": {
+                    "customer_email": {
+                        "description": "Customer email address.",
+                        "type": "string",
+                        "format": "email",
+                        "example": "customer@example.com"
+                    },
+                    "amount": {
+                        "description": "Order total. Must be greater than zero.",
+                        "type": "number",
+                        "format": "float",
+                        "example": 149.99,
+                        "minimum": 0.01
+                    },
+                    "currency": {
+                        "description": "Three-letter ISO currency code.",
+                        "type": "string",
+                        "example": "USD",
+                        "maxLength": 3,
+                        "minLength": 3
+                    }
+                },
+                "type": "object"
+            },
+            "ValidationError": {
+                "required": [
+                    "message",
+                    "errors"
+                ],
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "example": "The customer email field must be a valid email address. (and 2 more errors)"
+                    },
+                    "errors": {
+                        "type": "object",
+                        "example": {
+                            "customer_email": [
+                                "Customer email must be a valid email address."
+                            ],
+                            "amount": [
+                                "Order amount must be greater than zero."
+                            ],
+                            "currency": [
+                                "Currency must be a 3-letter ISO code."
+                            ]
+                        },
+                        "additionalProperties": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                "type": "object"
+            }
+        }
+    },
+    "tags": [
+        {
+            "name": "Orders",
+            "description": "Order dispatch operations"
+        }
+    ]
+}
